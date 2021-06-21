@@ -21,13 +21,7 @@ struct usb_qh { // Queue head
         uint32_t bufptr[5];
     } overlay;
     uint32_t reserved;
-    struct usb_setup {
-        uint8_t bmRequestType;
-        uint8_t bRequest;
-        uint16_t wValue;
-        uint16_t wIndex;
-        uint16_t wLength;
-    } setup;
+    struct usb_setup setup;
 };
 
 static void usb_int_check() {
@@ -267,12 +261,10 @@ void usb_write_word(uint32_t addr, uint32_t value) {
 
 bool usb_suspend(emu_snapshot *snapshot)
 {
-    snapshot->mem.usb = usb;
-    return true;
+    return snapshot_write(snapshot, &usb, sizeof(usb));
 }
 
 bool usb_resume(const emu_snapshot *snapshot)
 {
-    usb = snapshot->mem.usb;
-    return true;
+    return snapshot_read(snapshot, &usb, sizeof(usb));
 }

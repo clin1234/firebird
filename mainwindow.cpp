@@ -1,5 +1,3 @@
-#include <future>
-
 #include <QFileDialog>
 #include <QStandardPaths>
 #include <QTextBlock>
@@ -290,9 +288,11 @@ void MainWindow::dragEnterEvent(QDragEnterEvent *e)
 
     for(QUrl &url : e->mimeData()->urls())
     {
-        static const QStringList valid_suffixes = { QStringLiteral("tns"), QStringLiteral("tno"),
-                                              QStringLiteral("tnc"), QStringLiteral("tco"),
-                                              QStringLiteral("tcc") };
+        static const QStringList valid_suffixes = { QStringLiteral("tns"),
+                                              QStringLiteral("tno"), QStringLiteral("tnc"),
+                                              QStringLiteral("tco"), QStringLiteral("tcc"),
+                                              QStringLiteral("tco2"), QStringLiteral("tcc2"),
+                                              QStringLiteral("tct2") };
 
         QFileInfo file(url.fileName());
         if(!valid_suffixes.contains(file.suffix().toLower()))

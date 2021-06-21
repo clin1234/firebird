@@ -27,6 +27,8 @@ void cpu_arm_loop()
     {
         arm.reg[15] &= ~0x3; // Align PC
         Instruction *p = static_cast<Instruction*>(read_instruction(arm.reg[15]));
+        if(!p)
+            error("Jumped out of memory\n");
 
         #ifdef BENCHMARK
             static clock_t start = 0;
@@ -43,6 +45,14 @@ void cpu_arm_loop()
         #endif
 
         uint32_t *flags_ptr = &RAM_FLAGS(p);
+
+        /* Force use of capTIvate on 5.2.0.722 CX II CAS
+        if(arm.reg[15] == 0x100114D4)
+        {
+            *flags_ptr |= RF_CODE_NO_TRANSLATE;
+            features = 1;
+            arm.reg[0] = features; // captivate
+        }*/
 
         // Check for pending events
         if(cpu_events)
@@ -424,14 +434,12 @@ void set_reg_bx(uint8_t i, uint32_t value)
 
 bool cpu_resume(const emu_snapshot *s)
 {
-    arm = s->cpu_state;
-    cpu_events = s->cpu_state.cpu_events_state;
-    return true;
+    return snapshot_read(s, &arm, sizeof(arm))
+           && snapshot_read(s, &cpu_events, sizeof(cpu_events));
 }
 
 bool cpu_suspend(emu_snapshot *s)
 {
-    s->cpu_state = arm;
-    s->cpu_state.cpu_events_state = cpu_events;
-    return true;
+    return snapshot_write(s, &arm, sizeof(arm))
+           && snapshot_write(s, &cpu_events, sizeof(cpu_events));
 }

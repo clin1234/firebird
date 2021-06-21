@@ -44,25 +44,27 @@ LIBS += -lz
 # Override bad default options to enable better optimizations
 QMAKE_CFLAGS_RELEASE = -O3 -DNDEBUG
 QMAKE_CXXFLAGS_RELEASE = -O3 -DNDEBUG
-# I don't know why g++-unix.conf sets -Wl,-O1, override that.
-!clang: QMAKE_LFLAGS_RELEASE += -Wl,-O3
 
 # Don't enable LTO with clang on Linux, incompatible with Qt (QTBUG-43556).
-!clang | !linux: {
-    QMAKE_CFLAGS_RELEASE += -flto
-    QMAKE_CXXFLAGS_RELEASE += -flto
-    QMAKE_LFLAGS_RELEASE += -flto
-}
+# On FreeBSD, clang with LTO produces copy relocs, which are incompatible
+# with Qt's -reduce-relocations option (QTBUG-86173).
+!clang | !if(linux|freebsd): CONFIG += ltcg
 
 # noexecstack is not supported by MinGW's as
 !win32 {
     QMAKE_CFLAGS += -Wa,--noexecstack
 }
 
+# Work around https://gcc.gnu.org/bugzilla/show_bug.cgi?id=52991
+win32: {
+    QMAKE_CFLAGS += -mno-ms-bitfields
+    QMAKE_CXXFLAGS += -mno-ms-bitfields
+}
+
 macx: ICON = resources/logo.icns
 
 # This does also apply to android
-linux|macx|ios: SOURCES += core/os/os-linux.c
+unix: SOURCES += core/os/os-linux.c
 
 android {
     # Special implementation of fopen_utf8
@@ -104,8 +106,6 @@ equals(FB_ARCH, "i386") {
 win32 {
     SOURCES += core/os/os-win32.c
     LIBS += -lwinmm -lws2_32
-    # Somehow it's set to x86_64...
-    FB_ARCH = x86
 }
 
 # A platform-independant implementation of lowlevel access as default
@@ -141,7 +141,6 @@ equals(SUPPORT_LINUX, true) {
 !android:contains(FB_ARCH, "arm") {
     QMAKE_CFLAGS += -march=armv7-a -marm
     QMAKE_CXXFLAGS += -march=armv7-a -marm
-    QMAKE_LFLAGS += -march=armv7-a -marm # We're using LTO, so the linker has to get the same flags
 }
 
 ANDROID_PACKAGE_SOURCE_DIR = $$PWD/android
@@ -149,6 +148,7 @@ ANDROID_PACKAGE_SOURCE_DIR = $$PWD/android
 QML_IMPORT_PATH += $$PWD/qml
 
 SOURCES += $$ASMCODE_IMPL \
+    core/fieldparser.cpp \
     lcdwidget.cpp \
     mainwindow.cpp \
     main.cpp \
@@ -178,7 +178,9 @@ SOURCES += $$ASMCODE_IMPL \
     core/serial.c \
     core/sha256.c \
     core/usb.c \
+    core/usb_cx2.cpp \
     core/usblink.c \
+    core/usblink_cx2.cpp \
     qtframebuffer.cpp \
     core/debug.cpp \
     core/flash.cpp \
@@ -187,13 +189,17 @@ SOURCES += $$ASMCODE_IMPL \
     kitmodel.cpp \
     fbaboutdialog.cpp \
     dockwidget.cpp \
-    consolelineedit.cpp
+    consolelineedit.cpp \
+    core/cx2.cpp
 
 FORMS += \
     mainwindow.ui \
     flashdialog.ui
 
 HEADERS += \
+    core/fieldparser.h \
+    core/usb_cx2.h \
+    core/usblink_cx2.h \
     emuthread.h \
     lcdwidget.h \
     flashdialog.h \
@@ -234,7 +240,8 @@ HEADERS += \
     kitmodel.h \
     fbaboutdialog.h \
     dockwidget.h \
-    consolelineedit.h
+    consolelineedit.h \
+    core/cx2.h
 
 # For localization
 lupdate_only {

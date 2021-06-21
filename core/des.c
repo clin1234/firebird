@@ -1,6 +1,7 @@
 #include <stdbool.h>
 #include <string.h>
 
+#include "des.h"
 #include "emu.h"
 #include "mem.h"
 
@@ -188,12 +189,10 @@ void des_write_word(uint32_t addr, uint32_t value) {
 
 bool des_suspend(emu_snapshot *snapshot)
 {
-    snapshot->mem.des = des;
-    return true;
+    return snapshot_write(snapshot, &des, sizeof(des));
 }
 
 bool des_resume(const emu_snapshot *snapshot)
 {
-    des = snapshot->mem.des;
-    return true;
+    return snapshot_read(snapshot, &des, sizeof(des));
 }

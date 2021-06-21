@@ -39,7 +39,6 @@ typedef struct arm_state {  // Remember to update asmcode.S if this gets rearran
     uint32_t r13_und[2], spsr_und;
 
     uint8_t  interrupts;
-    uint32_t cpu_events_state; // Only used for suspend and resume!
 }
 #ifndef __EMSCRIPTEN__
 __attribute__((packed,aligned(__alignof__(uint32_t))))
@@ -67,14 +66,21 @@ extern struct arm_state arm __asm__("arm");
 
 #define current_instr_size ((arm.cpsr_low28 & 0x20) ? 2 /* thumb */ : 4)
 
-// Needed for the assembler calling convention
+// Needed for the assembler calling convention.
+// The x86 JIT needs fastcall for some of the calls to outside.
+// The x86_64 JIT needs sysv_abi for all calls outside.
+#ifdef FASTCALL
+    #undef FASTCALL
+#endif
 #ifdef __i386__
-    #ifdef FASTCALL
-        #undef FASTCALL
-    #endif
     #define FASTCALL __attribute__((fastcall))
+    #define SYSVABI
+#elif defined(__x86_64__) && (defined(_WIN32) || defined(WIN32))
+    #define FASTCALL __attribute__((sysv_abi))
+    #define SYSVABI __attribute__((sysv_abi))
 #else
     #define FASTCALL
+    #define SYSVABI
 #endif
 
 typedef struct emu_snapshot emu_snapshot;

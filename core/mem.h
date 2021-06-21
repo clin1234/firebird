@@ -6,13 +6,6 @@
 #include <stdint.h>
 
 #include "cpu.h"
-#include "des.h"
-#include "misc.h"
-#include "interrupt.h"
-#include "keypad.h"
-#include "lcd.h"
-#include "sha256.h"
-#include "usb.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -26,7 +19,7 @@ struct mem_area_desc {
     uint32_t base, size;
     uint8_t *ptr;
 };
-extern struct mem_area_desc mem_areas[4];
+extern struct mem_area_desc mem_areas[5];
 void *phys_mem_ptr(uint32_t addr, uint32_t size);
 uint32_t phys_mem_addr(void *ptr);
 
@@ -60,8 +53,8 @@ void bad_write_byte(uint32_t addr, uint8_t value);
 void bad_write_half(uint32_t addr, uint16_t value);
 void bad_write_word(uint32_t addr, uint32_t value);
 
-void write_action(void *ptr) __asm__("write_action");
-void read_action(void *ptr) __asm__("read_action");
+void SYSVABI write_action(void *ptr) __asm__("write_action");
+void SYSVABI read_action(void *ptr) __asm__("read_action");
 
 uint32_t FASTCALL mmio_read_byte(uint32_t addr) __asm__("mmio_read_byte");
 uint32_t FASTCALL mmio_read_half(uint32_t addr) __asm__("mmio_read_half");
@@ -69,30 +62,6 @@ uint32_t FASTCALL mmio_read_word(uint32_t addr) __asm__("mmio_read_word");
 void FASTCALL mmio_write_byte(uint32_t addr, uint32_t value) __asm__("mmio_write_byte");
 void FASTCALL mmio_write_half(uint32_t addr, uint32_t value) __asm__("mmio_write_half");
 void FASTCALL mmio_write_word(uint32_t addr, uint32_t value) __asm__("mmio_write_word");
-
-typedef struct mem_snapshot
-{
-    size_t sdram_size;
-    uint8_t mem_and_flags[MEM_MAXSIZE]; // TODO: No flags saved. Only RF_EXEC_BREAKPOINT and maybe RF_READ_ONLY are interesting.
-    gpio_state gpio;
-    fastboot_state fastboot;
-    watchdog_state watchdog;
-    pmu_state pmu;
-    keypad_state keypad;
-    hdq1w_state hdq1w;
-    usb_state usb;
-    lcd_state lcd;
-    adc_state adc;
-    des_state des;
-    sha256_state sha256;
-    timer_state timer;
-    timer_cx_state timer_cx;
-    serial_state serial;
-    //ti84_io_state ti84; // TODO?
-    interrupt_state intr;
-    memctl_cx_state memctl_cx;
-    serial_cx_state serial_cx;
-} mem_snapshot;
 
 bool memory_initialize(uint32_t sdram_size);
 void memory_reset();

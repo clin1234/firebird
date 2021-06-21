@@ -14,12 +14,13 @@
 #include "gdbstub.h"
 #include "usblink_queue.h"
 #include "os/os.h"
+#include "schedule.h"
+#include "misc.h"
+#include "mem.h"
 
 /* cycle_count_delta is a (usually negative) number telling what the time is relative
  * to the next scheduled event. See sched.c */
 int cycle_count_delta = 0;
-
-int throttle_delay = 10; /* in milliseconds */
 
 uint32_t cpu_events;
 
@@ -105,15 +106,19 @@ void return_to_loop()
 
 extern "C" void usblink_timer();
 
+// Store the last time the throttle event happened
+static auto last_throttle = std::chrono::steady_clock::now();
+// Calculate speed by summing up the elapsed virtual and real time and taking the ratio
+static std::chrono::microseconds real_time_elapsed_sum, virt_time_elapsed_sum;
+
 void throttle_interval_event(int index)
 {
-    event_repeat(index, 27000000 / 100);
-
     /* Throttle interval (defined arbitrarily as 100Hz) - used for
      * keeping the emulator speed down, and other miscellaneous stuff
      * that needs to be done periodically */
-    static int intervals = 0, prev_intervals = 0;
-    intervals += 1;
+    event_repeat(index, 27000000 / 100);
+    // 100Hz -> called every virtual 10ms
+    const auto virt_throttle_interval = std::chrono::milliseconds(10);
 
     usblink_timer();
 
@@ -127,42 +132,32 @@ void throttle_interval_event(int index)
 
     rdebug_recv();
 
-    // Calculate speed
-    auto interval_end = std::chrono::high_resolution_clock::now();
-    static auto prev = interval_end;
-    static double speed = 1.0;
-    auto time = std::chrono::duration_cast<std::chrono::microseconds>(interval_end - prev).count();
-    if (time >= 500000) {
-        speed = (double)10000 * (intervals - prev_intervals) / time;
-        gui_show_speed(speed);
-        prev_intervals = intervals;
-        prev = interval_end;
+    // Compute how much time elapsed since last_throttle
+    auto real_interval = std::chrono::steady_clock::now() - last_throttle;
+    auto real_time_diff = virt_throttle_interval - real_interval;
+    auto real_time_left_us = std::chrono::duration_cast<std::chrono::microseconds>(real_time_diff).count();
+    // If less than the virtual throttle interval elapsed, wait
+    if(real_time_left_us > 0 && !turbo_mode)
+        throttle_timer_wait(real_time_left_us);
+
+    // Use this as the new value for last_throttle
+    auto new_last_throttle = std::chrono::steady_clock::now();
+
+    // Add the elapsed times to (real/virt)_time_elapsed_sum
+    auto real_time_elapsed = (new_last_throttle - last_throttle);
+    auto real_time_elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(real_time_elapsed);
+    real_time_elapsed_sum += real_time_elapsed_us;
+    virt_time_elapsed_sum += virt_throttle_interval;
+    // When half a (real) second passes, use the sums for speed computation and clear them
+    if(real_time_elapsed_sum >= std::chrono::milliseconds(500))
+    {
+        gui_show_speed(double(virt_time_elapsed_sum.count()) / real_time_elapsed_sum.count());
+        virt_time_elapsed_sum = real_time_elapsed_sum = {};
     }
 
+    last_throttle = new_last_throttle;
+
     gui_do_stuff(true);
-
-    if (!turbo_mode)
-        throttle_timer_wait();
-}
-
-static size_t gzip_filesize(const char *path)
-{
-    #if __BYTE_ORDER == __LITTLE_ENDIAN
-        FILE *fp = fopen_utf8(path, "rb");
-        if(!fp)
-            return false;
-
-        // The last four bytes of a gzip file are the uncompressed size (% 2^32)
-        fseek(fp, -4, SEEK_END);
-        uint32_t ret = 0;
-        if(fread(&ret, 4, 1, fp) != 1)
-            ret = 0;
-
-        fclose(fp);
-        return ret;
-    #else
-        #error "Not implemented"
-    #endif
 }
 
 struct gui_busy_raii {
@@ -186,6 +181,16 @@ static void emu_reset()
     memory_reset();
 }
 
+bool snapshot_read(const emu_snapshot *snapshot, void *dest, int size)
+{
+    return gzread((gzFile)snapshot->stream_handle, dest, size) == size;
+}
+
+bool snapshot_write(emu_snapshot *snapshot, const void *src, int size)
+{
+    return gzwrite((gzFile)snapshot->stream_handle, src, size) == size;
+}
+
 bool emu_start(unsigned int port_gdb, unsigned int port_rdbg, const char *snapshot_file)
 {
     gui_busy_raii gui_busy;
@@ -193,10 +198,6 @@ bool emu_start(unsigned int port_gdb, unsigned int port_rdbg, const char *snapsh
     if(snapshot_file)
     {
         // Open snapshot
-        size_t snapshot_size = gzip_filesize(snapshot_file);
-        if(snapshot_size < sizeof(emu_snapshot))
-            return false;
-
         FILE *fp = fopen_utf8(snapshot_file, "rb");
         if(!fp)
             return false;
@@ -213,51 +214,50 @@ bool emu_start(unsigned int port_gdb, unsigned int port_rdbg, const char *snapsh
             return false;
         }
 
-        auto snapshot = (struct emu_snapshot *) malloc(snapshot_size);
-        if(!snapshot)
+        emu_snapshot snapshot = {};
+        snapshot.stream_handle = gzf;
+        // Read the header
+        if(!snapshot_read(&snapshot, &snapshot.header, sizeof(snapshot.header)))
         {
             gzclose(gzf);
             return false;
         }
 
-        if((size_t) gzread(gzf, snapshot, snapshot_size) != snapshot_size)
-        {
-            gzclose(gzf);
-            free(snapshot);
-            return false;
-        }
-        gzclose(gzf);
-
-        //sched_reset();
         sched.items[SCHED_THROTTLE].clock = CLOCK_27M;
         sched.items[SCHED_THROTTLE].proc = throttle_interval_event;
 
         // TODO: Max length
-        path_boot1 = std::string(snapshot->path_boot1);
-        path_flash = std::string(snapshot->path_flash);
-
-        // TODO: Pass snapshot_size to flash_resume to avoid reading after the buffer
+        path_boot1 = std::string(snapshot.header.path_boot1);
+        path_flash = std::string(snapshot.header.path_flash);
 
         // Resume components
-        uint32_t sdram_size;
-        if(snapshot->sig != SNAPSHOT_SIG
-                || snapshot->version != SNAPSHOT_VER
-                || !flash_resume(snapshot)
+        uint32_t sdram_size, dummy;
+        if(snapshot.header.sig != SNAPSHOT_SIG
+                || snapshot.header.version != SNAPSHOT_VER
+                || !flash_resume(&snapshot)
                 || !flash_read_settings(&sdram_size, &product, &features, &asic_user_flags)
-                || !cpu_resume(snapshot)
-                || !memory_resume(snapshot)
-                || !sched_resume(snapshot))
+                || !cpu_resume(&snapshot)
+                || !memory_resume(&snapshot)
+                || !sched_resume(&snapshot)
+                // Verify that EOF is next
+                || gzread(gzf, &dummy, sizeof(dummy)) != 0
+                || !gzeof(gzf))
         {
+            gzclose(gzf);
             emu_cleanup();
-            free(snapshot);
             return false;
         }
-        free(snapshot);
+
+        if(gzclose(gzf) != Z_OK)
+        {
+            emu_cleanup();
+            return false;
+        }
     }
     else
     {
         if (!flash_open(path_flash.c_str()))
-                return false;
+            return false;
 
         uint32_t sdram_size;
         flash_read_settings(&sdram_size, &product, &features, &asic_user_flags);
@@ -394,38 +394,26 @@ bool emu_suspend(const char *file)
         return false;
     }
 
-    size_t size = sizeof(emu_snapshot) + flash_suspend_flexsize();
-    auto snapshot = (struct emu_snapshot *) malloc(size);
-    if(!snapshot)
-    {
-        gzclose(gzf);
-        return false;
-    }
+    emu_snapshot snapshot = {};
+    snapshot.stream_handle = gzf;
 
-    snapshot->product = product;
-    snapshot->asic_user_flags = asic_user_flags;
+    snapshot.header.sig = SNAPSHOT_SIG;
+    snapshot.header.version = SNAPSHOT_VER;
     // TODO: Max length
-    strncpy(snapshot->path_boot1, path_boot1.c_str(), sizeof(snapshot->path_boot1) - 1);
-    strncpy(snapshot->path_flash, path_flash.c_str(), sizeof(snapshot->path_flash) - 1);
+    strncpy(snapshot.header.path_boot1, path_boot1.c_str(), sizeof(snapshot.header.path_boot1) - 1);
+    strncpy(snapshot.header.path_flash, path_flash.c_str(), sizeof(snapshot.header.path_flash) - 1);
 
-    if(!flash_suspend(snapshot)
-            || !cpu_suspend(snapshot)
-            || !sched_suspend(snapshot)
-            || !memory_suspend(snapshot))
+    if(!snapshot_write(&snapshot, &snapshot.header, sizeof(snapshot.header))
+            || !flash_suspend(&snapshot)
+            || !cpu_suspend(&snapshot)
+            || !memory_suspend(&snapshot)
+            || !sched_suspend(&snapshot))
     {
-        free(snapshot);
         gzclose(gzf);
         return false;
     }
 
-    snapshot->sig = SNAPSHOT_SIG;
-    snapshot->version = SNAPSHOT_VER;
-
-    bool success = (size_t) gzwrite(gzf, snapshot, size) == size;
-
-    free(snapshot);
-    gzclose(gzf);
-    return success;
+    return gzclose(gzf) == Z_OK;
 }
 
 void emu_cleanup()

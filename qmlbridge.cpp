@@ -1,9 +1,9 @@
-#include <iostream>
 #include <cassert>
 #include <unistd.h>
 
 #include <QUrl>
 
+#include "emuthread.h"
 #include "qmlbridge.h"
 
 #ifndef MOBILE_UI

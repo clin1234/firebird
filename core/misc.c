@@ -59,18 +59,6 @@ void nandctl_cx_write_word(uint32_t addr, uint32_t value)
     bad_write_word(addr, value);
 }
 
-bool memctl_cx_suspend(emu_snapshot *snapshot)
-{
-    snapshot->mem.memctl_cx = memctl_cx;
-    return true;
-}
-
-bool memctl_cx_resume(const emu_snapshot *snapshot)
-{
-    memctl_cx = snapshot->mem.memctl_cx;
-    return true;
-}
-
 void memctl_cx_reset(void) {
     memctl_cx.status = 0;
     memctl_cx.config = 0;
@@ -119,30 +107,19 @@ void memctl_cx_write_word(uint32_t addr, uint32_t value) {
 /* 90000000 */
 struct gpio_state gpio;
 
-bool gpio_resume(const emu_snapshot *snapshot)
-{
-    gpio = snapshot->mem.gpio;
-    return true;
-}
-
-bool gpio_suspend(emu_snapshot *snapshot)
-{
-    snapshot->mem.gpio = gpio;
-    return true;
-}
-
 void gpio_reset() {
     memset(&gpio, 0, sizeof gpio);
     gpio.direction.w = 0xFFFFFFFFFFFFFFFF;
     gpio.output.w    = 0x0000000000000000;
 
-    gpio.input.w     = 0x00001000070F001F;
+    gpio.input.w     = 0x00001000071F001F;
     touchpad_gpio_reset();
 }
 uint32_t gpio_read(uint32_t addr) {
     int port = addr >> 6 & 7;
     switch (addr & 0x3F) {
         case 0x04: return 0;
+        case 0x08: return 0;
         case 0x10: return gpio.direction.b[port];
         case 0x14: return gpio.output.b[port];
         case 0x18: return gpio.input.b[port] | gpio.output.b[port];
@@ -156,6 +133,7 @@ void gpio_write(uint32_t addr, uint32_t value) {
     int port = addr >> 6 & 3;
     uint32_t change;
     switch (addr & 0x3F) {
+        /* Interrupt handling not implemented */
         case 0x04: return;
         case 0x08: return;
         case 0x0C: return;
@@ -181,18 +159,6 @@ void gpio_write(uint32_t addr, uint32_t value) {
 /* 90010000, 900C0000, 900D0000 */
 static timer_state timer;
 #define ADDR_TO_TP(addr) (&timer.pairs[((addr) >> 16) % 5])
-
-bool timer_resume(const emu_snapshot *snapshot)
-{
-    timer = snapshot->mem.timer;
-    return true;
-}
-
-bool timer_suspend(emu_snapshot *snapshot)
-{
-    snapshot->mem.timer = timer;
-    return true;
-}
 
 uint32_t timer_read(uint32_t addr) {
     struct timerpair *tp = ADDR_TO_TP(addr);
@@ -287,18 +253,6 @@ void fastboot_cx_write(uint32_t addr, uint32_t value) {
     fastboot.mem[(addr & 0xFFF) >> 2] = value;
 }
 
-bool fastboot_cx_resume(const emu_snapshot *snapshot)
-{
-    fastboot = snapshot->mem.fastboot;
-    return true;
-}
-
-bool fastboot_cx_suspend(emu_snapshot *snapshot)
-{
-    snapshot->mem.fastboot = fastboot;
-    return true;
-}
-
 /* 90040000: PL022 connected to the LCI over SPI */
 uint32_t spi_cx_read(uint32_t addr) {
     switch (addr & 0xFFF)
@@ -315,18 +269,6 @@ void spi_cx_write(uint32_t addr, uint32_t value) {
 
 /* 90060000 */
 static watchdog_state watchdog;
-
-bool watchdog_resume(const emu_snapshot *snapshot)
-{
-    watchdog = snapshot->mem.watchdog;
-    return true;
-}
-
-bool watchdog_suspend(emu_snapshot *snapshot)
-{
-    snapshot->mem.watchdog = watchdog;
-    return true;
-}
 
 static void watchdog_reload() {
     if (watchdog.control & 1) {
@@ -405,11 +347,24 @@ void watchdog_write(uint32_t addr, uint32_t value) {
     bad_write_word(addr, value);
 }
 
-/* 90080000 */
+/* 90080000: also an FTSSP010 */
+uint32_t unknown_9008_read(uint32_t addr) {
+    switch (addr & 0xFFFF) {
+        case 0x00: return 0;
+        case 0x08: return 0;
+        case 0x10: return 0;
+        case 0x1C: return 0;
+        case 0x60: return 0;
+        case 0x64: return 0;
+    }
+    return bad_read_word(addr);
+}
+
 void unknown_9008_write(uint32_t addr, uint32_t value) {
     switch (addr & 0xFFFF) {
-        case 0x8: return;
-        case 0xC: return;
+        case 0x00: return;
+        case 0x08: return;
+        case 0x0C: return;
         case 0x10: return;
         case 0x14: return;
         case 0x18: return;
@@ -419,27 +374,16 @@ void unknown_9008_write(uint32_t addr, uint32_t value) {
 }
 
 /* 90090000 */
-static time_t rtc_time_diff;
-uint32_t rtc_read(uint32_t addr) {
-    switch (addr & 0xFFFF) {
-        case 0x00: return time(NULL) - rtc_time_diff;
-        case 0x14: return 0;
-    }
-    return bad_read_word(addr);
-}
-void rtc_write(uint32_t addr, uint32_t value) {
-    switch (addr & 0xFFFF) {
-        case 0x04: return;
-        case 0x08: rtc_time_diff = time(NULL) - value; return;
-        case 0x0C: return;
-        case 0x10: return;
-    }
-    bad_write_word(addr, value);
+struct rtc_state rtc;
+
+void rtc_reset() {
+    rtc.offset = 0;
 }
 
-uint32_t rtc_cx_read(uint32_t addr) {
+uint32_t rtc_read(uint32_t addr) {
     switch (addr & 0xFFFF) {
-        case 0x000: return time(NULL);
+        case 0x00: return time(NULL) - rtc.offset;
+        case 0x14: return 0;
         case 0xFE0: return 0x31;
         case 0xFE4: return 0x10;
         case 0xFE8: return 0x04;
@@ -447,12 +391,13 @@ uint32_t rtc_cx_read(uint32_t addr) {
     }
     return bad_read_word(addr);
 }
-void rtc_cx_write(uint32_t addr, uint32_t value) {
+void rtc_write(uint32_t addr, uint32_t value) {
     switch (addr & 0xFFFF) {
-        case 0x004: return;
-        case 0x00C: return;
-        case 0x010: return;
-        case 0x01C: return;
+        case 0x04: return;
+        case 0x08: rtc.offset = time(NULL) - value; return;
+        case 0x0C: return;
+        case 0x10: return;
+        case 0x1C: return;
     }
     bad_write_word(addr, value);
 }
@@ -467,7 +412,14 @@ uint32_t misc_read(uint32_t addr) {
     { 0x8C000000, 0x00000002 },
 };
     switch (addr & 0x0FFF) {
-        case 0x00: return emulate_cx ? 0x101 : 0x01000010;
+        case 0x00: {
+            if(emulate_cx2)
+                return 0x202;
+            else if(emulate_cx)
+                return 0x101;
+
+            return 0x01000010;
+        }
         case 0x04: return 0;
         case 0x0C: return 0;
         case 0x10: case 0x18: case 0x20:
@@ -514,18 +466,6 @@ void misc_write(uint32_t addr, uint32_t value) {
 
 /* 900B0000 */
 struct pmu_state pmu;
-
-bool pmu_resume(const emu_snapshot *snapshot)
-{
-    pmu = snapshot->mem.pmu;
-    return true;
-}
-
-bool pmu_suspend(emu_snapshot *snapshot)
-{
-    snapshot->mem.pmu = pmu;
-    return true;
-}
 
 void pmu_reset(void) {
     memset(&pmu, 0, sizeof pmu);
@@ -598,24 +538,13 @@ void pmu_write(uint32_t addr, uint32_t value) {
 /* 90010000, 900C0000(?), 900D0000 */
 static timer_cx_state timer_cx;
 static void timer_cx_event(int index);
-bool timer_cx_resume(const emu_snapshot *snapshot)
-{
-    timer_cx = snapshot->mem.timer_cx;
-    return true;
-}
-
-bool timer_cx_suspend(emu_snapshot *snapshot)
-{
-    snapshot->mem.timer_cx = timer_cx;
-    return true;
-}
 
 void timer_cx_int_check(int which) {
     int_set(INT_TIMER0+which, (timer_cx.timer[which][0].interrupt & timer_cx.timer[which][0].control >> 5)
             | (timer_cx.timer[which][1].interrupt & timer_cx.timer[which][1].control >> 5));
 }
 uint32_t timer_cx_read(uint32_t addr) {
-    cycle_count_delta = 0; // Avoid slowdown by fast-forwarding through polling loops
+    cycle_count_delta += 1000; // avoid slowdown with polling loops
     int which = (addr >> 16) % 5;
     struct cx_timer *t = &timer_cx.timer[which][addr >> 5 & 1];
     switch (addr & 0xFFFF) {
@@ -626,6 +555,8 @@ uint32_t timer_cx_read(uint32_t addr) {
         case 0x0014: case 0x0034: return t->interrupt & t->control >> 5;
         case 0x0018: case 0x0038: return t->load;
         case 0x001C: case 0x003C: return 0; //?
+        // The OS reads from 0x80 and writes it into 0x30 ???
+        case 0x0080: return 0;
         case 0x0FE0: return 0x04;
         case 0x0FE4: return 0x18;
         case 0x0FE8: return 0x14;
@@ -644,7 +575,12 @@ void timer_cx_write(uint32_t addr, uint32_t value) {
         case 0x0000: case 0x0020: t->reload = 1; /* fallthrough */
         case 0x0018: case 0x0038: t->load = value; return;
         case 0x0004: case 0x0024: return;
-        case 0x0008: case 0x0028: t->control = value; timer_cx_int_check(which); return;
+        case 0x0008: case 0x0028:
+            t->control = value;
+            if(which == 0 && (value & 0x80))
+                error("Fast timer not implemented");
+            timer_cx_int_check(which);
+        return;
         case 0x000C: case 0x002C: t->interrupt = 0; timer_cx_int_check(which); return;
 
         case 0x0080: return; // ???
@@ -705,18 +641,6 @@ void timer_cx_reset() {
 /* 900F0000 */
 hdq1w_state hdq1w;
 
-bool hdq1w_resume(const emu_snapshot *snapshot)
-{
-    hdq1w = snapshot->mem.hdq1w;
-    return true;
-}
-
-bool hdq1w_suspend(emu_snapshot *snapshot)
-{
-    snapshot->mem.hdq1w = hdq1w;
-    return true;
-}
-
 void hdq1w_reset() {
     hdq1w.lcd_contrast = 0;
 }
@@ -740,26 +664,31 @@ void hdq1w_write(uint32_t addr, uint32_t value) {
     bad_write_word(addr, value);
 }
 
-/* 90110000 */
-uint32_t unknown_9011_read(uint32_t addr) {
-    switch (addr & 0xFFFF) {
-        case 0x000: return 0;
-        case 0xB00: return 0x1643;
-        case 0xB04: return 0;
-        case 0xB08: return 0xFFFFF800;
-        case 0xB0C: return 0;
-        case 0xB10: return 0xFFFFF800;
-    }
+/* 90110000: LED */
+static led_state led;
+
+void led_reset() {
+    memset(&led, 0, sizeof(led));
+}
+
+uint32_t led_read_word(uint32_t addr) {
+    uint32_t offset = addr & 0xFFFF;
+    if(offset == 0)
+        return 0;
+    else if(offset >= 0xB00 && offset - 0xB00 < sizeof(led.regs))
+        return led.regs[(offset - 0xB00) >> 2];
+
     return bad_read_word(addr);
 }
-void unknown_9011_write(uint32_t addr, uint32_t value) {
-    switch (addr & 0xFFFF) {
-        case 0xB00: return;
-        case 0xB04: return;
-        case 0xB08: return;
-        case 0xB0C: return;
-        case 0xB10: return;
+void led_write_word(uint32_t addr, uint32_t value) {
+    uint32_t offset = addr & 0xFFFF;
+    if(offset == 0)
+        return;
+    else if(offset >= 0xB00 && offset - 0xB00 < sizeof(led.regs)) {
+        led.regs[(offset - 0xB00) >> 2] = value;
+        return;
     }
+
     bad_write_word(addr, value);
 }
 
@@ -865,29 +794,8 @@ void sramctl_write_word(uint32_t addr, uint32_t value) {
     return;
 }
 
-/* BC000000 */
-uint32_t unknown_BC_read_word(uint32_t addr) {
-    switch (addr & 0x3FFFFFF) {
-        case 0xC: return 0;
-        case 0x1C: return 0;
-    }
-    return bad_read_word(addr);
-}
-
 /* C4000000: ADC (Analog-to-Digital Converter) */
 static adc_state adc;
-
-bool adc_resume(const emu_snapshot *snapshot)
-{
-    adc = snapshot->mem.adc;
-    return true;
-}
-
-bool adc_suspend(emu_snapshot *snapshot)
-{
-    snapshot->mem.adc = adc;
-    return true;
-}
 
 static uint16_t adc_read_channel(int n) {
     if (pmu.disable2 & 0x10)
@@ -963,4 +871,49 @@ void adc_write_word(uint32_t addr, uint32_t value) {
     }
     bad_write_word(addr, value);
     return;
+}
+
+// Not really implemented
+uint32_t adc_cx2_read_word(uint32_t addr)
+{
+    (void) addr;
+    return 0x6969;
+}
+
+void adc_cx2_write_word(uint32_t addr, uint32_t value)
+{
+    (void) addr;
+    (void) value;
+    // It expects an IRQ on writing something
+    int_set(INT_ADC, 1);
+}
+
+bool misc_suspend(emu_snapshot *snapshot)
+{
+    return snapshot_write(snapshot, &memctl_cx, sizeof(memctl_cx))
+            && snapshot_write(snapshot, &gpio, sizeof(gpio))
+            && snapshot_write(snapshot, &timer, sizeof(timer))
+            && snapshot_write(snapshot, &fastboot, sizeof(fastboot))
+            && snapshot_write(snapshot, &watchdog, sizeof(watchdog))
+            && snapshot_write(snapshot, &rtc, sizeof(rtc))
+            && snapshot_write(snapshot, &pmu, sizeof(pmu))
+            && snapshot_write(snapshot, &timer_cx, sizeof(timer_cx))
+            && snapshot_write(snapshot, &hdq1w, sizeof(hdq1w))
+            && snapshot_write(snapshot, &led, sizeof(led))
+            && snapshot_write(snapshot, &adc, sizeof(adc));
+}
+
+bool misc_resume(const emu_snapshot *snapshot)
+{
+    return snapshot_read(snapshot, &memctl_cx, sizeof(memctl_cx))
+            && snapshot_read(snapshot, &gpio, sizeof(gpio))
+            && snapshot_read(snapshot, &timer, sizeof(timer))
+            && snapshot_read(snapshot, &fastboot, sizeof(fastboot))
+            && snapshot_read(snapshot, &watchdog, sizeof(watchdog))
+            && snapshot_read(snapshot, &rtc, sizeof(rtc))
+            && snapshot_read(snapshot, &pmu, sizeof(pmu))
+            && snapshot_read(snapshot, &timer_cx, sizeof(timer_cx))
+            && snapshot_read(snapshot, &hdq1w, sizeof(hdq1w))
+            && snapshot_read(snapshot, &led, sizeof(led))
+            && snapshot_read(snapshot, &adc, sizeof(adc));
 }

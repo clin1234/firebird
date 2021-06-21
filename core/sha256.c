@@ -1,5 +1,6 @@
 #include <string.h>
 #include "emu.h"
+#include "sha256.h"
 #include "mem.h"
 
 static sha256_state sha256;
@@ -115,12 +116,10 @@ void sha256_write_word(uint32_t addr, uint32_t value) {
 
 bool sha256_suspend(emu_snapshot *snapshot)
 {
-    snapshot->mem.sha256 = sha256;
-    return true;
+    return snapshot_write(snapshot, &sha256, sizeof(sha256));
 }
 
 bool sha256_resume(const emu_snapshot *snapshot)
 {
-    sha256 = snapshot->mem.sha256;
-    return true;
+    return snapshot_read(snapshot, &sha256, sizeof(sha256));
 }

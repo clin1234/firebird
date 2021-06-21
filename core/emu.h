@@ -5,11 +5,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "cpu.h"
 #include "flash.h"
-#include "mem.h"
-#include "lcd.h"
-#include "schedule.h"
 
 #ifdef __cplusplus
 #include <string>
@@ -31,7 +27,6 @@ static inline uint16_t BSWAP16(uint16_t x) { return x << 8 | x >> 8; }
 #define BSWAP32(x) __builtin_bswap32(x)
 
 extern int cycle_count_delta __asm__("cycle_count_delta");
-extern int throttle_delay;
 extern uint32_t cpu_events __asm__("cpu_events");
 #define EVENT_IRQ 1
 #define EVENT_FIQ 2
@@ -52,7 +47,9 @@ extern uint32_t product, features, asic_user_flags;
 #define emulate_casplus (product == 0x0C0)
 // 0C-0E (CAS, lab cradle, plain Nspire) use old ASIC
 // 0F-12 (CX CAS, CX, CM CAS, CM) use new ASIC
+// 1C-1E (CX II CAS, CX II, CX II T) use an even newer ASIC
 #define emulate_cx (product >= 0x0F0)
+#define emulate_cx2 (product >= 0x1C0)
 extern bool turbo_mode;
 
 enum { LOG_CPU, LOG_IO, LOG_FLASH, LOG_INTS, LOG_ICOUNT, LOG_USB, LOG_GDB, MAX_LOG };
@@ -65,7 +62,7 @@ void warn(const char *fmt, ...);
 __attribute__((noreturn)) void error(const char *fmt, ...);
 void throttle_timer_on();
 void throttle_timer_off();
-void throttle_timer_wait();
+void throttle_timer_wait(unsigned int usec);
 void add_reset_proc(void (*proc)(void));
 
 // Uses emu_longjmp to return into the main loop.
@@ -90,19 +87,22 @@ typedef void (*debug_input_cb)(const char *input);
 void gui_debugger_request_input(debug_input_cb callback);
 
 #define SNAPSHOT_SIG 0xCAFEBEE0
-#define SNAPSHOT_VER 2
+#define SNAPSHOT_VER 3
 
+// Passed to resume/suspend functions.
+// Use snapshot_(read/write) to access stream contents.
 typedef struct emu_snapshot {
-    uint32_t sig; // SNAPSHOT_SIG
-    uint32_t version; // SNAPSHOT_VER
-    int product, asic_user_flags;
-    char path_boot1[512];
-    char path_flash[512];
-    sched_state sched;
-    arm_state cpu_state;
-    mem_snapshot mem;
-    flash_snapshot flash;
+    void *stream_handle;
+    struct {
+        uint32_t sig; // SNAPSHOT_SIG
+        uint32_t version; // SNAPSHOT_VER
+        char path_boot1[512];
+        char path_flash[512];
+    } header;
 } emu_snapshot;
+
+bool snapshot_read(const emu_snapshot *snapshot, void *dest, int size);
+bool snapshot_write(emu_snapshot *snapshot, const void *src, int size);
 
 bool emu_start(unsigned int port_gdb, unsigned int port_rdbg, const char *snapshot);
 void emu_loop(bool reset);
